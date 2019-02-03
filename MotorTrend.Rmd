@@ -1,0 +1,232 @@
+---
+title: "Analysis of MPG for Different Types of Transmission"
+output:
+  pdf_document: default
+  html_document: default
+---
+#### Paul Ringsted, 31st January 2019 - Course 7 (Regression Models)
+
+```{r global_options, include=FALSE}
+library(knitr)
+opts_chunk$set(fig.width=6, fig.height=3.5, fig.pos = "H", echo=FALSE, eval=TRUE)
+```
+
+## Synopsis
+
+In this report we analyze whether the choice of automatic or manual transmission makes a difference to the Miles Per Gallon (MPG), using data from the 1974 Motor Trend US magazine for 32 different cars.
+
+We conclude that cars with manual transmissions (which tend to have smaller engines and weigh less), do have a higher mean MPG than cars with automatic transmissions (which tend to have larger engines and weigh more).  The difference in mean MPG is 7.2 +/- 4.0.  There is not enough data to support a conclusion that the choice of transmission itself causes an MPG efficiency vs. other highly correlated factors such as engine size and vehicle weight. However, we are able to fit a regression model based on the interaction of weight and transmission to conclude that for each 1000lb decrease in vehicle weight, MPG improves by 9.1 for manual transmissions, vs. 3.8 for automatic transmissions.
+
+## Is an Automatic or Manual Transmission Better for MPG?
+
+This analysis is on the R mtcars dataset. This data was extracted from the 1974 Motor Trend US magazine, and comprises fuel consumption and 10 aspects of automobile design and performance for 32 automobiles (1973–74 models). We first gather some basic statistics to understand the MPG data for different transmissions:
+
+```{r libraries, message=FALSE}
+library(ggplot2)
+library(kableExtra)
+library(datasets)
+
+```
+```{r load_data}
+#-------------------------------------------------------------------------------------
+# Load mtcars data and copy to 'mt' dataframe for ease of reference
+data(mtcars)
+mt<-mtcars
+
+# Clean up flags to make them factor variables with proper names
+for (i in c(2,8:11)) { mt[,i]<-as.factor(mt[,i])}
+levels(mt$am)<-c("Automatic","Manual")
+
+# Build and render a table of basic stats for the dataset
+mtstats<-cbind(aggregate(mt$mpg,by=list(mt$am),FUN=mean))
+mtstats<-cbind(mtstats,aggregate(mt$mpg,by=list(mt$am),FUN=min)$x)
+mtstats<-cbind(mtstats,aggregate(mt$mpg,by=list(mt$am),FUN=max)$x)
+mtstats<-cbind(mtstats,aggregate(mt$mpg,by=list(mt$am),FUN=sd)$x)
+
+cyltab<-table(mt$am,mt$cyl)
+mtstats<-cbind(mtstats,aggregate(mt$mpg,by=list(mt$am),FUN=length)$x)
+mtstats<-cbind(mtstats,rbind(cyltab[1,],cyltab[2,]))
+
+mtstats %>% kable(col.names=c("Transmission","MPG Mean","MPG Min","MPG Max","MPG SD",
+                "Cars","4 Cyl","6 Cyl","8 Cyl"),booktabs=T,
+                align=c("c",rep("r",8)),digits=c(2,2,2,2,3,2,2,2,2)) %>%
+        kable_styling(latex_options = "hold_position")
+
+```
+Plots of the data are shown in the Appendix:
+
+* Figure 1 - Boxplot of MPG by transmission type
+
+* Table 3 - Correlation matrix for MPG data
+
+* Figure 3 - Plot of MPG by Weight, by Cylinder and Transmission (with regression model)
+
+The highest correlations between MPG and other variables are with displacement, cylinders and weight.  There is a high degree of correlation between the variables e.g. displacement is a function of cylinders therefore highly correlated; heavier cars have bigger engines with higher displacements, etc.
+
+As shown in the data table and illustrated in Figure 3, the transmission type is not well randomized across cars with different weights and engine types.  We can see a clear grouping of "small" cars (4 cylinders, weight <= 3.165, 10-20 MPG) having predominantly manual transmissions; "big" cars (8 cylinders, weight >= 3.165, 20-35 MPG) having predominantly automatic transmissions; and a cluster of "midsize" cars (6 cylinders, weight 2.5-3.5, 17-22 MPG) roughly evenly split between manual and automatic transmissions.
+
+Based on Figure 1, looking purely at transmission type and ignoring all other car features, the 25-75% quantiles for the populations are distinct with a higher MPG evident in cars with manual transmissions, however there is a large degree of overlap.
+
+To statistically confirm whether transmission type significantly affects mean MPG, we will perform a two-sided 95% t-test between the different transmission types.  Our null hypothesis is that transmission type has no impact on mean MPG i.e.
+
+Null hypothesis $H_0 : \mu_{auto}-\mu_{man}=0$ vs. alternative $H_a : \mu_{auto}-\mu_{man}\neq0$
+
+```{r t-test}
+#-------------------------------------------------------------------------------------
+# Perform t-test for mean MPG by transmission type
+
+test1<-t.test(mpg~am,paired=FALSE,var.equal=FALSE,data=mt)
+c_lo<-test1$conf.int[1]
+c_hi<-test1$conf.int[2]
+pval<-test1$p.value
+tval<-test1$statistic
+dval<-test1$parameter
+testtype<-"Auto vs. Manual, All Cylinders"
+
+#Build a dataframe with the test statistics (p-values in % for display) and render it
+results<-data.frame(testtype,tval,dval,c_lo,c_hi,pval,stringsAsFactors = FALSE)
+results %>% kable(col.names=c("T-Test","T-Statistic","DoF","Conf Int Low",
+                              "Conf Int High","P-Value %"),
+                  align=c("l",rep("r",5)),digits=c(2,3,0,2,2,5),booktabs=T,
+                  caption="Results of T-Test in Mean MPG Between Transmissions") %>%
+                kable_styling(latex_options = "hold_position")
+
+ci<-(c_hi-c_lo)/2
+ci_mid<-abs(c_lo+ci)
+
+```
+
+Across all type of car, the resulting Confidence Interval does not bound 0, and has a significant P-Value (`r round(pval[1],4)`) < 0.05.
+
+**Conclusion: Cars with manual transmissions, have a higher mean MPG than cars with automatic transmissions. The difference in mean MPG is `r round(ci_mid,2)` $\pm$ `r round(ci,2)`.**
+
+## Modeling MPG
+
+See appendix for exploratory model fitting output.  Fitting a basic model with all variables, anova() highlights the variables cyl, disp and wt as being significant. Comparing these for fit using anova() shows that adding disp adds no value, and there are two viable options for the model with roughly equivalent RSS which were considered:
+
+* mpg~cyl+wt $\implies$ 3 regression lines with same slope but different intercepts by cylinder (as a factor)
+
+* mpg~wt*am $\implies$ 2 regression lines with different slopes by transmission type (as a factor)
+
+Since we want to gain insight on the effect of transmission type on MPG, the second model was selected, ie our model is as follows:
+
+$MPG_{i} = \beta_{0} + \beta_{1}WT_{i} +\beta_{2}AM_{i}+\beta_{3}WT_{i}AM_{i} + e_i$, where:
+
+For car i: $MPG_i$= MPG; $WT_i$ = Weight; $AM_{i}$ = Transmission (0/1); $e_i$ = Error of the model
+
+$AM_{i}=0\implies MPG_{i} = \beta_{0} + \beta_{1}WT_{i} + e_i$ (Automatic)
+
+$AM_{i}=1\implies MPG_{i} = (\beta_{0} + \beta_{2}) + (\beta_{1} + \beta_{3}) \times WT_{i} + e_i$ (Manual)
+
+```{r fit1}
+#-------------------------------------------------------------------------------------
+# Fit model to cyl+wt and get coefficients to use in report and plots
+fitmt<-lm(mpg~wt*am,mt)
+beta0<-coef(fitmt)[1]
+beta1<-coef(fitmt)[2]
+beta2<-coef(fitmt)[3]
+beta3<-coef(fitmt)[4]
+itc_auto<-beta0
+itc_man<-beta0+beta2
+slope_auto<-beta1
+slope_man<-beta1+beta3
+rss<-sum(fitmt$residuals^2)
+r2<-summary(fitmt)$r.squared
+call<-summary(fitmt)$call
+coef<-summary(fitmt)$coefficients
+ci<-confint(fitmt)
+coef2<-cbind(coef,as.data.frame(ci))
+coef2 %>% kable(caption="Coefficients and CI of MPG Model (wt*am)", booktabs=T) %>%
+                kable_styling(latex_options = "hold_position")
+
+```
+
+This model yields 2 regression lines; for automatic transmissions the slope is $\beta_{1}$ = `r round(slope_auto,2)`, and for manual transmissions the slope is $\beta_{1}+\beta_{3}$ = `r round(slope_man,2)`.  The slopes represent the rate by which MPG changes by weight of vehicle.
+
+Figure 3 reflects the regression lines.  Figure 4 shows the fit diagnostics including residuals vs. fit which looks reasonable.  Note the two outliers (Toyota Corolla and Fiat 128) which have the highest MPGs; their removal would further improve model fit but given small size of the dataset no exclusions were applied.  The model has RSS = `r round(rss,1)`, $R^2$ = `r round(r2,3)` and all estimates lie outside 2 s.d. of zero with low p-values, so this appears to be a reasonable model fit.
+
+**Conclusion: For each 1000lb change in vehicle weight, MPG changes by `r round(slope_man,2)` for manual transmissions, and `r round(slope_auto,2)` for automatic transmissions.**
+
+\newpage
+## Appendix - Figures and Tables
+```{r fig1, fig.align="center", fig.cap ="MPG by Transmission"}
+#-------------------------------------------------------------------------------------
+# Fig1: Box plot of MPG by transmission type
+g <- ggplot(data=mt,aes(x=am,y=mpg))
+g <- g + geom_boxplot(aes(group=am)) 
+g <- g + geom_jitter(shape=16, position=position_jitter(0.1))
+g <- g + labs(x="Transmission",y="MPG")
+print(g)
+```
+
+```{r tab3, fig.align="center", fig.cap ="Correlation Matrix for MPG Data (in %)"}
+#-------------------------------------------------------------------------------------
+# Table3: Correlation data (using original dataframe)
+cor_res<-round(100*cor(mtcars),1)
+cor_res %>% kable(booktabs=T,
+                caption="Correlation Matrix for MPG Data") %>%
+                kable_styling(latex_options = "hold_position")
+```
+
+```{r fig2, fig.align="center", fig.cap ="MPG by Weight with Model Fit"}
+#-------------------------------------------------------------------------------------
+# Fig2: Plot of MPG by weight with model fit
+wtcut<-max(subset(mt,cyl == 4)$wt)
+g <- ggplot(data=mt,aes(x=wt,y=mpg,col=am,pch=cyl))
+g <- g + geom_point(size=3)
+g <- g + geom_vline(xintercept=wtcut,col="red",linetype="dotted")
+g <- g + geom_abline(intercept=itc_auto,slope=slope_auto,col="red")
+g <- g + geom_abline(intercept=itc_man,slope=slope_man,col="blue")
+g <- g + geom_text(aes(wtcut+0.1, 35, vjust=0, hjust=0,
+                        label = paste0("Large cars (8 Cyl) > wt ",round(wtcut,1))))
+g <- g + labs(x="Weight (1000lb)",y="MPG",pch="No of Cylinders",color="Transmission")
+g <- g + scale_colour_manual(values = c("red","blue"))
+print(g)
+
+```
+
+```{r fig3, fig.align="center", fig.cap ="Model Fit Diagnostics", fig.width=5, fig.height=5}
+#-------------------------------------------------------------------------------------
+# Fig3: Plot of model fit diagnostics
+par(mfrow=c(2,2))
+plot(fitmt)
+
+```
+
+**Anova for broad model with all variables lm(mpg~.,mt):**
+```{r anova1, fig.align="center", fig.cap ="Model Selection Process"}
+#-------------------------------------------------------------------------------------
+# Model selection - anova() results for all variables
+fitall<-lm(mpg~.,mt)
+anova(fitall)
+
+```
+
+**Anova fits for cyl, wt, disp and am combinations:**
+```{r anova2, fig.align="center", fig.cap ="Model Selection Process"}
+#-------------------------------------------------------------------------------------
+# Model selection - anova() results for subset of significant variables
+fit1<-lm(mpg~cyl,mt)
+fit2<-lm(mpg~cyl+wt,mt)
+fit3<-lm(mpg~cyl+wt+disp,mt)
+fit4<-lm(mpg~cyl+wt+disp+am,mt)
+fit5<-lm(mpg~cyl+wt+am,mt)
+anova(fit1,fit2,fit3,fit4,fit5)
+
+```
+
+**Anova fits for wt, am combinations:**
+```{r anova3, fig.align="center", fig.cap ="Model Selection Process"}
+#-------------------------------------------------------------------------------------
+# Model selection - anova() results for subset of significant variables
+fit6<-lm(mpg~wt,mt)
+fit7<-lm(mpg~wt+am,mt)
+fit8<-lm(mpg~wt*am,mt)
+anova(fit6,fit7,fit8)
+
+```
+
+\newpage
+## Code Appendix - R Code
+```{r ref.label=knitr::all_labels(), echo = T, eval = F}
+```
